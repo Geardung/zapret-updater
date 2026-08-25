@@ -4,6 +4,9 @@
     Runs git pull and recreates the zapret service if updates were pulled.
 #>
 
+# --- Outer try/catch wraps EVERYTHING so crash logs are always written ---
+try {
+
 # --- Admin check ---
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
@@ -23,8 +26,11 @@ $maxLogSize = 1MB
 $serviceName = "zapret"
 $regPath = "HKLM:\System\CurrentControlSet\Services\$serviceName"
 $regValueName = "zapret-discord-youtube"
-$desktopPath = [Environment]::GetFolderPath("Desktop")
-$crashLogFile = Join-Path $desktopPath "zapret-update-error.txt"
+# SYSTEM has its own Desktop — use Public\Desktop so user can see it
+$publicDesktop = Join-Path $env:SystemDrive "Users\Public\Desktop"
+$crashLogFile = Join-Path $publicDesktop "zapret-update-error.txt"
+# Also write to zapret logs dir as fallback
+$crashLogFallback = Join-Path $logDir "crash.log"
 
 # --- Logging ---
 function Write-Log {
@@ -43,7 +49,7 @@ function Write-Log {
     else { Write-Host $line }
 }
 
-# --- Crash log to desktop ---
+# --- Crash log to desktop + logs fallback ---
 function Write-CrashLog {
     param([string]$ErrorMessage, [string]$StackTrace = "")
     $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -54,8 +60,15 @@ Error: $ErrorMessage
 $(if ($StackTrace) { "Stack trace:`n$StackTrace" })
 Log file: $logFile
 "@
+    # Write to Public Desktop (visible to user even when running as SYSTEM)
     try {
+        if (-not (Test-Path $publicDesktop)) { New-Item -ItemType Directory -Path $publicDesktop -Force | Out-Null }
         [System.IO.File]::WriteAllText($crashLogFile, $body, [System.Text.Encoding]::UTF8)
+    } catch {}
+    # Also write to zapret logs dir as fallback
+    try {
+        if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+        [System.IO.File]::WriteAllText($crashLogFallback, $body, [System.Text.Encoding]::UTF8)
     } catch {}
 }
 
@@ -328,5 +341,31 @@ try {
     Write-Log "Unexpected error: $_" "ERROR"
     Write-Log $_.ScriptStackTrace "ERROR"
     Write-CrashLog -ErrorMessage $_.ToString() -StackTrace $_.ScriptStackTrace
+    exit 1
+}
+
+} catch {
+    # Outer catch — catches errors that happen before inner try/catch (config, function defs, etc.)
+    $errMsg = $_.ToString()
+    $errStack = $_.ScriptStackTrace
+    # Write-CrashLog may not be defined yet, write directly
+    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $body = @"
+=== Zapret Auto-Update CRASH (outer) ===
+Time: $ts
+Error: $errMsg
+Stack trace:
+$errStack
+"@
+    try {
+        $pubDesk = Join-Path $env:SystemDrive "Users\Public\Desktop"
+        if (-not (Test-Path $pubDesk)) { New-Item -ItemType Directory -Path $pubDesk -Force | Out-Null }
+        [System.IO.File]::WriteAllText((Join-Path $pubDesk "zapret-update-error.txt"), $body, [System.Text.Encoding]::UTF8)
+    } catch {}
+    try {
+        $ld = Join-Path $PSScriptRoot "logs"
+        if (-not (Test-Path $ld)) { New-Item -ItemType Directory -Path $ld -Force | Out-Null }
+        [System.IO.File]::WriteAllText((Join-Path $ld "crash.log"), $body, [System.Text.Encoding]::UTF8)
+    } catch {}
     exit 1
 }
