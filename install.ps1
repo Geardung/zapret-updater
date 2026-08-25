@@ -125,6 +125,8 @@ $maxLogSize = 1MB
 $serviceName = "zapret"
 $regPath = "HKLM:\System\CurrentControlSet\Services\$serviceName"
 $regValueName = "zapret-discord-youtube"
+$desktopPath = [Environment]::GetFolderPath("Desktop")
+$crashLogFile = Join-Path $desktopPath "zapret-update-error.txt"
 
 # --- Logging ---
 function Write-Log {
@@ -141,6 +143,22 @@ function Write-Log {
     if ($Level -eq "ERROR") { Write-Host $line -ForegroundColor Red }
     elseif ($Level -eq "WARN") { Write-Host $line -ForegroundColor Yellow }
     else { Write-Host $line }
+}
+
+# --- Crash log to desktop ---
+function Write-CrashLog {
+    param([string]$ErrorMessage, [string]$StackTrace = "")
+    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $body = @"
+=== Zapret Auto-Update Error ===
+Time: $ts
+Error: $ErrorMessage
+$(if ($StackTrace) { "Stack trace:`n$StackTrace" })
+Log file: $logFile
+"@
+    try {
+        [System.IO.File]::WriteAllText($crashLogFile, $body, [System.Text.Encoding]::UTF8)
+    } catch {}
 }
 
 # --- Parse bat file arguments (ported from service.bat) ---
@@ -242,12 +260,14 @@ try {
 
     if (-not (Get-Command "git" -ErrorAction SilentlyContinue)) {
         Write-Log "git not found in PATH. Cannot update." "ERROR"
+        Write-CrashLog "git not found in PATH. Cannot update."
         exit 1
     }
 
     $gitDir = Join-Path $zapretPath ".git"
     if (-not (Test-Path $gitDir)) {
         Write-Log "Zapret directory is not a git repo: $zapretPath" "ERROR"
+        Write-CrashLog "Zapret directory is not a git repo: $zapretPath"
         exit 1
     }
 
@@ -266,6 +286,7 @@ try {
 
     if ($LASTEXITCODE -ne 0) {
         Write-Log "git pull failed (exit code $LASTEXITCODE)" "ERROR"
+        Write-CrashLog "git pull failed (exit code $LASTEXITCODE). Output: $pullText"
         exit 1
     }
 
@@ -297,6 +318,7 @@ try {
 
     if (-not $batFile) {
         Write-Log "No suitable bat file found. Cannot recreate service." "ERROR"
+        Write-CrashLog "No suitable bat file found for strategy '$strategyName'. Cannot recreate service."
         exit 1
     }
 
@@ -379,6 +401,7 @@ try {
 } catch {
     Write-Log "Unexpected error: $_" "ERROR"
     Write-Log $_.ScriptStackTrace "ERROR"
+    Write-CrashLog -ErrorMessage $_.ToString() -StackTrace $_.ScriptStackTrace
     exit 1
 }
 '@
