@@ -53,13 +53,9 @@ function Write-Log {
 function Write-CrashLog {
     param([string]$ErrorMessage, [string]$StackTrace = "")
     $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $body = @"
-=== Zapret Auto-Update Error ===
-Time: $ts
-Error: $ErrorMessage
-$(if ($StackTrace) { "Stack trace:`n$StackTrace" })
-Log file: $logFile
-"@
+    $body = "=== Zapret Auto-Update Error ===`r`nTime: $ts`r`nError: $ErrorMessage`r`n"
+    if ($StackTrace) { $body += "Stack trace:`r`n$StackTrace`r`n" }
+    $body += "Log file: $logFile"
     # Write to Public Desktop (visible to user even when running as SYSTEM)
     try {
         if (-not (Test-Path $publicDesktop)) { New-Item -ItemType Directory -Path $publicDesktop -Force | Out-Null }
@@ -350,13 +346,7 @@ try {
     $errStack = $_.ScriptStackTrace
     # Write-CrashLog may not be defined yet, write directly
     $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $body = @"
-=== Zapret Auto-Update CRASH (outer) ===
-Time: $ts
-Error: $errMsg
-Stack trace:
-$errStack
-"@
+    $body = "=== Zapret Auto-Update CRASH (outer) ===`r`nTime: $ts`r`nError: $errMsg`r`nStack trace:`r`n$errStack"
     try {
         $pubDesk = Join-Path $env:SystemDrive "Users\Public\Desktop"
         if (-not (Test-Path $pubDesk)) { New-Item -ItemType Directory -Path $pubDesk -Force | Out-Null }
