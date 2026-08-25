@@ -1,15 +1,15 @@
 <#
 .SYNOPSIS
     Uninstaller for zapret auto-updater.
-    Usage: irm https://geardung.github.io/zapret-updater/uninstall-updater.ps1 | iex
+    Usage: irm https://geardung.github.io/zapret-updater/delete.ps1 | iex
 #>
 
 # --- Admin check ---
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     Write-Host "  Requesting administrator privileges..." -ForegroundColor Yellow
-    $scriptUrl = "https://geardung.github.io/zapret-updater/uninstall-updater.ps1"
-    $tempFile = Join-Path $env:TEMP "zapret-uninstall-updater.ps1"
+    $scriptUrl = "https://geardung.github.io/zapret-updater/delete.ps1"
+    $tempFile = Join-Path $env:TEMP "zapret-delete.ps1"
     Invoke-WebRequest -Uri $scriptUrl -OutFile $tempFile -UseBasicParsing
     Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$tempFile`""
     exit
@@ -61,7 +61,7 @@ if (-not $zapretPath -or -not (Test-Path $zapretPath)) {
 Write-Ok "Found zapret at: $zapretPath"
 
 # --- Step 3: Remove updater script ---
-$updaterPath = Join-Path $zapretPath "utils\zapret-auto-update.ps1"
+$updaterPath = Join-Path $zapretPath "utils\updater.ps1"
 Write-Info "Removing updater script..."
 if (Test-Path $updaterPath) {
     Remove-Item $updaterPath -Force

@@ -4,24 +4,24 @@
 ## Установка
 
 ```powershell
-irm https://geardung.github.io/zapret-updater/install-updater.ps1 | iex
+irm https://geardung.github.io/zapret-updater/install.ps1 | iex
 ```
 
 Что делает:
 - Находит zapret через реестр Windows
 - Инициализирует git-репозиторий (если ещё не инициализирован)
-- Создаёт скрипт авто-обновления в `utils\zapret-auto-update.ps1`
+- Создаёт скрипт авто-обновления в `utils\updater.ps1`
 - Регистрирует задачу в Планировщике задач (запуск от SYSTEM, задержка 60с)
 
 ## Удаление
 
 ```powershell
-irm https://geardung.github.io/zapret-updater/uninstall-updater.ps1 | iex
+irm https://geardung.github.io/zapret-updater/delete.ps1 | iex
 ```
 
 Что удаляет:
 - Задачу `ZapretAutoUpdate` из Планировщика задач
-- Скрипт `utils\zapret-auto-update.ps1`
+- Скрипт `utils\updater.ps1`
 - Логи `utils\logs\auto-update.log*`
 
 Служба zapret **не затрагивается** — она продолжит работать как раньше.

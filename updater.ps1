@@ -1,107 +1,5 @@
 <#
 .SYNOPSIS
-    Installer for zapret auto-updater.
-    Usage: irm https://geardung.github.io/zapret-updater/install-updater.ps1 | iex
-#>
-
-# --- Admin check ---
-$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Write-Host "  Requesting administrator privileges..." -ForegroundColor Yellow
-    $scriptUrl = "https://geardung.github.io/zapret-updater/install-updater.ps1"
-    $tempFile = Join-Path $env:TEMP "zapret-install-updater.ps1"
-    Invoke-WebRequest -Uri $scriptUrl -OutFile $tempFile -UseBasicParsing
-    Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$tempFile`""
-    exit
-}
-
-$ErrorActionPreference = "Stop"
-
-function Write-Ok   { param([string]$Msg) Write-Host "  [OK] $Msg" -ForegroundColor Green }
-function Write-Err  { param([string]$Msg) Write-Host "  [ERR] $Msg" -ForegroundColor Red }
-function Write-Info { param([string]$Msg) Write-Host "  [..] $Msg" -ForegroundColor Cyan }
-
-Write-Host ""
-Write-Host "  Zapret Auto-Updater Installer" -ForegroundColor Cyan
-Write-Host "  =============================" -ForegroundColor Cyan
-Write-Host ""
-
-# --- Step 1: Detect zapret path from service registry ---
-Write-Info "Detecting zapret installation..."
-$regPath = "HKLM:\System\CurrentControlSet\Services\zapret"
-$zapretPath = $null
-
-try {
-    $imagePath = (Get-ItemProperty -Path $regPath -Name "ImagePath" -ErrorAction Stop).ImagePath
-    # ImagePath looks like: "D:\programs\zapret-discord-youtube\bin\winws.exe" --args...
-    if ($imagePath -match '^"([^"]+)"') {
-        $binExe = $Matches[1]
-        $zapretPath = Split-Path (Split-Path $binExe -Parent) -Parent
-    }
-} catch {
-    # Service not found via registry
-}
-
-if (-not $zapretPath -or -not (Test-Path $zapretPath)) {
-    Write-Err "Zapret service not found or path is invalid."
-    Write-Err "Make sure zapret is installed via service.bat first."
-    exit 1
-}
-
-Write-Ok "Found zapret at: $zapretPath"
-
-# --- Step 2: Validate ---
-Write-Info "Validating installation..."
-$serviceBat = Join-Path $zapretPath "service.bat"
-$winwsExe = Join-Path $zapretPath "bin\winws.exe"
-
-if (-not (Test-Path $serviceBat)) {
-    Write-Err "service.bat not found in $zapretPath"
-    exit 1
-}
-if (-not (Test-Path $winwsExe)) {
-    Write-Err "bin\winws.exe not found in $zapretPath"
-    exit 1
-}
-Write-Ok "Installation validated"
-
-# --- Step 3: Check git ---
-Write-Info "Checking git..."
-if (-not (Get-Command "git" -ErrorAction SilentlyContinue)) {
-    Write-Err "git is not installed or not in PATH."
-    Write-Err "Install git first: winget install Git.Git"
-    exit 1
-}
-$gitVersion = & git --version 2>&1
-Write-Ok "Git found: $gitVersion"
-
-# --- Step 4: Ensure git repo ---
-Write-Info "Checking git repository..."
-$gitDir = Join-Path $zapretPath ".git"
-if (-not (Test-Path $gitDir)) {
-    Write-Info "Not a git repo. Initializing..."
-    & git -C $zapretPath init 2>&1 | Out-Null
-    & git -C $zapretPath remote add origin "https://github.com/Flowseal/zapret-discord-youtube.git" 2>&1 | Out-Null
-    & git -C $zapretPath fetch origin 2>&1 | Out-Null
-    & git -C $zapretPath reset --hard origin/main 2>&1 | Out-Null
-    Write-Ok "Git repo initialized and synced with upstream"
-} else {
-    $remote = & git -C $zapretPath remote get-url origin 2>&1
-    Write-Ok "Git repo exists (remote: $remote)"
-}
-
-# --- Step 5: Write updater script ---
-Write-Info "Installing updater script..."
-$utilsDir = Join-Path $zapretPath "utils"
-if (-not (Test-Path $utilsDir)) {
-    New-Item -ItemType Directory -Path $utilsDir -Force | Out-Null
-}
-$updaterPath = Join-Path $utilsDir "zapret-auto-update.ps1"
-
-# Updater script content
-$updaterContent = @'
-<#
-.SYNOPSIS
     Auto-updater for zapret-discord-youtube.
     Runs git pull and recreates the zapret service if updates were pulled.
 #>
@@ -110,7 +8,7 @@ $updaterContent = @'
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     Write-Host "  Requesting administrator privileges..." -ForegroundColor Yellow
-    $scriptPath = if ($MyInvocation.MyCommand.Path) { $MyInvocation.MyCommand.Path } else { Join-Path $PSScriptRoot "zapret-auto-update.ps1" }
+    $scriptPath = if ($MyInvocation.MyCommand.Path) { $MyInvocation.MyCommand.Path } else { Join-Path $PSScriptRoot "updater.ps1" }
     Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$scriptPath`""
     exit
 }
@@ -150,14 +48,16 @@ function Get-BatArguments {
     $lines = Get-Content -Path $BatFilePath -Encoding UTF8
     $capture = $false
     $args = ""
-    $mergeargs = 0
+    $mergeargs = 0  # 0=default, 1=collecting comma-args, 2=just saw --param, 3=expecting value for named arg
     $argsWithValue = @("sni", "host", "altorder")
+    $firstLine = $true
 
     foreach ($line in $lines) {
         $line = $line.Trim()
 
         if ($line -match "winws\.exe") {
             $capture = $true
+            # Extract everything after winws.exe" (the closing quote)
             if ($line -match 'winws\.exe"?\s*(.*)') {
                 $line = $Matches[1]
             } else {
@@ -167,8 +67,10 @@ function Get-BatArguments {
 
         if (-not $capture) { continue }
 
+        # Handle line continuation (^)
         $line = $line -replace '\^$', ''
 
+        # Tokenize respecting quotes
         $tokens = @()
         $current = ""
         $inQuote = $false
@@ -190,15 +92,20 @@ function Get-BatArguments {
 
         foreach ($token in $tokens) {
             $arg = $token
+
+            # Skip bare ^ artifacts
             if ($arg -eq "^" -or $arg -eq "^^") { continue }
 
+            # New --param resets merge state
             if ($arg.StartsWith("--") -and $mergeargs -ne 0) {
                 $mergeargs = 0
             }
 
+            # Handle quoted values: strip outer quotes, resolve relative paths
             if ($arg.StartsWith('"') -and $arg.EndsWith('"') -and $arg.Length -gt 2) {
                 $inner = $arg.Substring(1, $arg.Length - 2)
                 if ($inner -match ':') {
+                    # Absolute path — keep as-is with quotes
                     $arg = "`"$inner`""
                 } elseif ($inner.StartsWith('@')) {
                     $arg = "`"@$RootPath$($inner.Substring(1))`""
@@ -207,6 +114,7 @@ function Get-BatArguments {
                 }
             }
 
+            # Merge logic
             if ($mergeargs -eq 1) {
                 $args += ",$arg"
             } elseif ($mergeargs -eq 3) {
@@ -216,6 +124,7 @@ function Get-BatArguments {
                 $args += " $arg"
             }
 
+            # Update merge state
             if ($arg.StartsWith("--")) {
                 $mergeargs = 2
             } elseif ($mergeargs -ge 1) {
@@ -234,23 +143,27 @@ function Get-BatArguments {
 try {
     Write-Log "=== Auto-update started ==="
 
+    # Check zapret service exists
     $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
     if (-not $svc) {
         Write-Log "Service '$serviceName' not found. Skipping update." "WARN"
         exit 0
     }
 
+    # Check git
     if (-not (Get-Command "git" -ErrorAction SilentlyContinue)) {
         Write-Log "git not found in PATH. Cannot update." "ERROR"
         exit 1
     }
 
+    # Check it's a git repo
     $gitDir = Join-Path $zapretPath ".git"
     if (-not (Test-Path $gitDir)) {
         Write-Log "Zapret directory is not a git repo: $zapretPath" "ERROR"
         exit 1
     }
 
+    # git pull (--quiet suppresses stderr progress noise that triggers ErrorActionPreference)
     Write-Log "Running git pull in $zapretPath"
     $prevEAP = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
@@ -269,13 +182,16 @@ try {
         exit 1
     }
 
+    # Show what changed
     $ErrorActionPreference = "Continue"
     $recentCommits = & git -C $zapretPath log --oneline -5 2>&1
     $ErrorActionPreference = $prevEAP
     Write-Log "Recent commits after update:`n$(($recentCommits | ForEach-Object { $_.ToString() }) -join "`n")"
 
+    # --- Recreate service ---
     Write-Log "Updates detected. Recreating zapret service..."
 
+    # Read current strategy name from registry
     $strategyName = $null
     try {
         $regKey = Get-ItemProperty -Path $regPath -Name $regValueName -ErrorAction Stop
@@ -286,6 +202,7 @@ try {
     }
     Write-Log "Current strategy: $strategyName"
 
+    # Find matching .bat file
     $batFile = Get-ChildItem -Path $zapretPath -Filter "*.bat" |
         Where-Object { $_.Name -notlike "service*" -and $_.BaseName -eq $strategyName } |
         Select-Object -First 1
@@ -321,8 +238,10 @@ try {
     $parsedArgs = $parsedArgs -replace '%GameFilterUDP%', $gameFilterUDP
     Write-Log "Resolved args: $parsedArgs"
 
+    # Enable TCP timestamps
     & netsh interface tcp set global timestamps=enabled 2>&1 | Out-Null
 
+    # Stop service
     Write-Log "Stopping zapret service..."
     $svcState = (Get-Service -Name $serviceName -ErrorAction SilentlyContinue).Status
     if ($svcState -eq "Running") {
@@ -332,9 +251,11 @@ try {
         Write-Log "Service was not running (state: $svcState). Skipping stop."
     }
 
+    # Kill leftover winws.exe
     Get-Process -Name "winws" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 1
 
+    # Delete service
     Write-Log "Deleting zapret service..."
     $prevEAP2 = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
@@ -342,6 +263,7 @@ try {
     $ErrorActionPreference = $prevEAP2
     Start-Sleep -Seconds 2
 
+    # Create service
     $binPath = Join-Path $zapretPath "bin\winws.exe"
     Write-Log "Creating service..."
     # sc.exe requires binPath= <value> syntax that PowerShell cannot pass correctly.
@@ -357,14 +279,18 @@ try {
     Remove-Item $batPath -Force -ErrorAction SilentlyContinue
     Write-Log "sc create output: $createOutput"
 
+    # Set description
     & sc.exe description $serviceName "Zapret DPI bypass software" 2>&1 | Out-Null
 
+    # Save strategy name to registry
     & reg add "HKLM\System\CurrentControlSet\Services\$serviceName" /v $regValueName /t REG_SZ /d $strategyName /f 2>&1 | Out-Null
 
+    # Start service
     Write-Log "Starting zapret service..."
     $startOutput = & sc.exe start $serviceName 2>&1
     Write-Log "sc start output: $startOutput"
 
+    # Verify
     Start-Sleep -Seconds 3
     $newSvc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
     if ($newSvc -and $newSvc.Status -eq "Running") {
@@ -381,70 +307,3 @@ try {
     Write-Log $_.ScriptStackTrace "ERROR"
     exit 1
 }
-'@
-
-Set-Content -Path $updaterPath -Value $updaterContent -Encoding UTF8
-Write-Ok "Updater script written to: $updaterPath"
-
-# --- Step 6: Create Scheduled Task ---
-Write-Info "Creating scheduled task..."
-
-$taskName = "ZapretAutoUpdate"
-$taskDescription = "Auto-update zapret-discord-youtube via git pull on system startup"
-
-# Remove existing task if present
-$existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-if ($existing) {
-    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-    Write-Ok "Removed existing task"
-}
-
-# Trigger: at startup with 60s delay
-$trigger = New-ScheduledTaskTrigger -AtStartup
-$trigger.Delay = "PT60S"
-
-# Action: run updater script hidden
-$action = New-ScheduledTaskAction -Execute "powershell.exe" `
-    -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$updaterPath`""
-
-# Settings
-$settings = New-ScheduledTaskSettingsSet `
-    -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries `
-    -StartWhenAvailable `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 10) `
-    -RestartCount 1 `
-    -RestartInterval (New-TimeSpan -Minutes 1)
-
-# Principal: SYSTEM
-$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-
-# Register
-Register-ScheduledTask -TaskName $taskName `
-    -Description $taskDescription `
-    -Trigger $trigger `
-    -Action $action `
-    -Settings $settings `
-    -Principal $principal `
-    -Force | Out-Null
-
-Write-Ok "Scheduled task '$taskName' created"
-
-# --- Done ---
-Write-Host ""
-Write-Host "  =============================" -ForegroundColor Green
-Write-Host "  Installation complete!" -ForegroundColor Green
-Write-Host "  =============================" -ForegroundColor Green
-Write-Host ""
-Write-Host "  Zapret path:    $zapretPath"
-Write-Host "  Updater script: $updaterPath"
-Write-Host "  Task name:      $taskName"
-Write-Host "  Trigger:        System startup (60s delay)"
-Write-Host "  Log file:       $zapretPath\utils\logs\auto-update.log"
-Write-Host ""
-Write-Host "  To test manually:" -ForegroundColor Yellow
-Write-Host "    powershell -ExecutionPolicy Bypass -File `"$updaterPath`""
-Write-Host ""
-Write-Host "  To uninstall:" -ForegroundColor Yellow
-Write-Host "    irm https://geardung.github.io/zapret-updater/uninstall-updater.ps1 | iex"
-Write-Host ""
