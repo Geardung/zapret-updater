@@ -1,9 +1,19 @@
-#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Uninstaller for zapret auto-updater.
     Usage: irm https://geardung.github.io/zapret-updater/uninstall-updater.ps1 | iex
 #>
+
+# --- Admin check ---
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    Write-Host "  Requesting administrator privileges..." -ForegroundColor Yellow
+    $scriptUrl = "https://geardung.github.io/zapret-updater/uninstall-updater.ps1"
+    $tempFile = Join-Path $env:TEMP "zapret-uninstall-updater.ps1"
+    Invoke-WebRequest -Uri $scriptUrl -OutFile $tempFile -UseBasicParsing
+    Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$tempFile`""
+    exit
+}
 
 $ErrorActionPreference = "Stop"
 

@@ -1,9 +1,19 @@
-#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Installer for zapret auto-updater.
-    Usage: irm https://<your-url>/install-updater.ps1 | iex
+    Usage: irm https://geardung.github.io/zapret-updater/install-updater.ps1 | iex
 #>
+
+# --- Admin check ---
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    Write-Host "  Requesting administrator privileges..." -ForegroundColor Yellow
+    $scriptUrl = "https://geardung.github.io/zapret-updater/install-updater.ps1"
+    $tempFile = Join-Path $env:TEMP "zapret-install-updater.ps1"
+    Invoke-WebRequest -Uri $scriptUrl -OutFile $tempFile -UseBasicParsing
+    Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$tempFile`""
+    exit
+}
 
 $ErrorActionPreference = "Stop"
 
@@ -90,12 +100,20 @@ $updaterPath = Join-Path $utilsDir "zapret-auto-update.ps1"
 
 # Updater script content
 $updaterContent = @'
-#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Auto-updater for zapret-discord-youtube.
     Runs git pull and recreates the zapret service if updates were pulled.
 #>
+
+# --- Admin check ---
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    Write-Host "  Requesting administrator privileges..." -ForegroundColor Yellow
+    $scriptPath = if ($MyInvocation.MyCommand.Path) { $MyInvocation.MyCommand.Path } else { Join-Path $PSScriptRoot "zapret-auto-update.ps1" }
+    Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$scriptPath`""
+    exit
+}
 
 $ErrorActionPreference = "Stop"
 
